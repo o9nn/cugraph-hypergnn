@@ -37,3 +37,63 @@ def test_graph_store_basic_api(single_pytorch_worker):
     graph_store.remove_edge_index(("person", "knows", "person"), "coo")
     edge_attrs = graph_store.get_all_edge_attrs()
     assert len(edge_attrs) == 0
+
+
+@pytest.mark.skipif(isinstance(torch, MissingModule), reason="torch not available")
+@pytest.mark.sg
+def test_graph_store_hyperedge_api(single_pytorch_worker):
+    """Test GraphStore hyperedge functionality"""
+    graph_store = GraphStore()
+    
+    # Create a simple hypergraph with 4 nodes and 2 hyperedges
+    # Hyperedge 0: connects nodes [0, 1, 2]
+    # Hyperedge 1: connects nodes [1, 2, 3]
+    
+    # Define in bipartite format: [node_indices, hyperedge_indices]
+    node_indices = [0, 1, 2, 1, 2, 3]
+    hyperedge_indices = [0, 0, 0, 1, 1, 1]
+    hyperedge_index = torch.tensor(
+        [node_indices, hyperedge_indices],
+        dtype=torch.int64,
+        device="cuda",
+    )
+    
+    # Store hyperedge index
+    success = graph_store.put_hyperedge_index(
+        hyperedge_index,
+        ("node", "in", "hyperedge"),
+        num_nodes=4,
+        num_hyperedges=2,
+    )
+    assert success
+    
+    # Verify it was stored
+    edge_attrs = graph_store.get_all_edge_attrs()
+    assert len(edge_attrs) == 1
+    assert edge_attrs[0].edge_type == ("node", "in", "hyperedge")
+
+
+@pytest.mark.skipif(isinstance(torch, MissingModule), reason="torch not available")
+@pytest.mark.sg
+def test_graph_store_hyperedge_list_format(single_pytorch_worker):
+    """Test GraphStore hyperedge with list-of-lists format"""
+    graph_store = GraphStore()
+    
+    # Define hyperedges as list of node lists
+    hyperedges = [
+        [0, 1, 2],  # Hyperedge 0
+        [1, 2, 3],  # Hyperedge 1
+    ]
+    
+    # Store hyperedge index
+    success = graph_store.put_hyperedge_index(
+        hyperedges,
+        ("node", "in", "hyperedge"),
+        num_nodes=4,
+        num_hyperedges=2,
+    )
+    assert success
+    
+    # Verify it was stored
+    edge_attrs = graph_store.get_all_edge_attrs()
+    assert len(edge_attrs) == 1

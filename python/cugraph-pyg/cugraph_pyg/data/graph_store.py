@@ -504,3 +504,82 @@ class GraphStore(
             ).cuda()
 
         return d
+
+    def put_hyperedge_index(
+        self,
+        hyperedge_index: TensorType,
+        edge_type: Tuple[str, str, str],
+        num_nodes: Optional[int] = None,
+        num_hyperedges: Optional[int] = None,
+    ) -> bool:
+        """
+        Store a hyperedge index by converting it to a bipartite graph representation.
+        
+        In hypergraphs, edges can connect more than two nodes. This method converts
+        hyperedges to a bipartite graph where nodes and hyperedges form two partitions.
+        
+        Parameters
+        ----------
+        hyperedge_index : TensorType
+            A 2D tensor of shape [2, num_edges] in bipartite format where:
+            - Row 0 contains node indices
+            - Row 1 contains hyperedge indices
+            Or a list of lists where each sublist contains node indices for a hyperedge.
+        edge_type : Tuple[str, str, str]
+            The edge type as (node_type, relation, hyperedge_type).
+        num_nodes : int, optional
+            The total number of nodes.
+        num_hyperedges : int, optional
+            The total number of hyperedges.
+            
+        Returns
+        -------
+        bool
+            True if successful.
+        """
+        # Convert to tensor if needed
+        if isinstance(hyperedge_index, (cupy.ndarray, cudf.Series)):
+            hyperedge_index = torch.as_tensor(hyperedge_index, device="cuda")
+        elif isinstance(hyperedge_index, np.ndarray):
+            hyperedge_index = torch.as_tensor(hyperedge_index, device="cpu")
+        elif isinstance(hyperedge_index, pandas.Series):
+            hyperedge_index = torch.as_tensor(hyperedge_index.values, device="cpu")
+        
+        # Convert list format to bipartite tensor if needed
+        if isinstance(hyperedge_index, (list, tuple)):
+            node_indices = []
+            hyperedge_indices = []
+            
+            for he_idx, nodes in enumerate(hyperedge_index):
+                if isinstance(nodes, (torch.Tensor, np.ndarray, list)):
+                    node_list = torch.as_tensor(nodes).tolist() if not isinstance(nodes, list) else nodes
+                    for node_idx in node_list:
+                        node_indices.append(node_idx)
+                        hyperedge_indices.append(he_idx)
+            
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            hyperedge_index = torch.tensor(
+                [node_indices, hyperedge_indices],
+                dtype=torch.int64,
+                device=device,
+            )
+        
+        # Ensure proper format [2, num_edges]
+        if hyperedge_index.dim() == 2 and hyperedge_index.shape[1] == 2:
+            hyperedge_index = hyperedge_index.t().contiguous()
+        
+        # Create edge attribute
+        if num_nodes is not None and num_hyperedges is not None:
+            size = (num_nodes, num_hyperedges)
+        else:
+            size = None
+            
+        edge_attr = torch_geometric.data.EdgeAttr(
+            edge_type=edge_type,
+            layout=torch_geometric.data.graph_store.EdgeLayout.COO,
+            is_sorted=False,
+            size=size,
+        )
+        
+        # Store using the regular edge index method
+        return self._put_edge_index(hyperedge_index, edge_attr)
