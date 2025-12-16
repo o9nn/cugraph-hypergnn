@@ -14,6 +14,7 @@ from pylibcugraph.comms import cugraph_comms_get_raft_handle
 from cugraph_pyg.utils.imports import import_optional, MissingModule
 from cugraph_pyg.tensor import DistTensor, DistMatrix
 from cugraph_pyg.tensor.utils import has_nvlink_network, is_empty
+from cugraph_pyg.data.hypergraph_utils import convert_hyperedges_to_bipartite
 
 from typing import Union, Optional, List, Dict, Tuple
 
@@ -545,28 +546,8 @@ class GraphStore(
         elif isinstance(hyperedge_index, pandas.Series):
             hyperedge_index = torch.as_tensor(hyperedge_index.values, device="cpu")
         
-        # Convert list format to bipartite tensor if needed
-        if isinstance(hyperedge_index, (list, tuple)):
-            node_indices = []
-            hyperedge_indices = []
-            
-            for he_idx, nodes in enumerate(hyperedge_index):
-                if isinstance(nodes, (torch.Tensor, np.ndarray, list)):
-                    node_list = torch.as_tensor(nodes).tolist() if not isinstance(nodes, list) else nodes
-                    for node_idx in node_list:
-                        node_indices.append(node_idx)
-                        hyperedge_indices.append(he_idx)
-            
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            hyperedge_index = torch.tensor(
-                [node_indices, hyperedge_indices],
-                dtype=torch.int64,
-                device=device,
-            )
-        
-        # Ensure proper format [2, num_edges]
-        if hyperedge_index.dim() == 2 and hyperedge_index.shape[1] == 2:
-            hyperedge_index = hyperedge_index.t().contiguous()
+        # Convert to bipartite format using utility function
+        hyperedge_index = convert_hyperedges_to_bipartite(hyperedge_index)
         
         # Create edge attribute
         if num_nodes is not None and num_hyperedges is not None:

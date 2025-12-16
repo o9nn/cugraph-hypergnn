@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from typing import Optional, List, Dict, Tuple, Union
 
 import numpy as np
@@ -10,8 +9,7 @@ import pandas
 
 from cugraph_pyg.utils.imports import import_optional, MissingModule
 from cugraph_pyg.data.graph_store import GraphStore
-from cugraph_pyg.tensor import DistTensor, DistMatrix
-from cugraph_pyg.tensor.utils import is_empty
+from cugraph_pyg.data.hypergraph_utils import convert_hyperedges_to_bipartite
 
 # Have to use import_optional even though these are required
 # dependencies in order to build properly.
@@ -48,7 +46,6 @@ class HypergraphStore(
         Constructs a new, empty HypergraphStore object.
         """
         self.__hyperedges = {}
-        self.__hyperedge_sizes = {}
         self.__graph_store = GraphStore()
         super().__init__()
 
@@ -91,9 +88,7 @@ class HypergraphStore(
         self.__hyperedges[edge_type] = hyperedge_index
         
         # Convert to bipartite representation and store in underlying GraphStore
-        bipartite_edge_index = self._to_bipartite(
-            hyperedge_index, num_nodes, num_hyperedges
-        )
+        bipartite_edge_index = convert_hyperedges_to_bipartite(hyperedge_index)
         
         # Create edge attribute for the bipartite graph
         if num_nodes is not None and num_hyperedges is not None:
@@ -140,6 +135,8 @@ class HypergraphStore(
         """
         Convert a hyperedge index to a bipartite graph representation.
         
+        DEPRECATED: Use convert_hyperedges_to_bipartite() from hypergraph_utils instead.
+        
         In the bipartite representation:
         - Nodes in the original graph form one partition
         - Hyperedges form the other partition
@@ -153,9 +150,9 @@ class HypergraphStore(
             expects a list-like structure where each element contains node indices
             for that hyperedge.
         num_nodes : int, optional
-            The total number of nodes.
+            The total number of nodes (unused, kept for compatibility).
         num_hyperedges : int, optional
-            The total number of hyperedges.
+            The total number of hyperedges (unused, kept for compatibility).
             
         Returns
         -------
@@ -163,47 +160,7 @@ class HypergraphStore(
             A 2D tensor of shape [2, num_edges] representing the bipartite graph
             in COO format. First row is node indices, second row is hyperedge indices.
         """
-        # If already in bipartite format [2, num_edges] or [num_edges, 2]
-        if isinstance(hyperedge_index, torch.Tensor):
-            if hyperedge_index.dim() == 2:
-                if hyperedge_index.shape[0] == 2:
-                    # Already in [2, num_edges] format
-                    return hyperedge_index
-                elif hyperedge_index.shape[1] == 2:
-                    # In [num_edges, 2] format, transpose
-                    return hyperedge_index.t().contiguous()
-        
-        # Convert list-like hyperedge representation to bipartite
-        node_indices = []
-        hyperedge_indices = []
-        
-        if isinstance(hyperedge_index, (list, tuple)):
-            for he_idx, nodes in enumerate(hyperedge_index):
-                if isinstance(nodes, (torch.Tensor, np.ndarray, list)):
-                    node_list = torch.as_tensor(nodes).tolist() if not isinstance(nodes, list) else nodes
-                    for node_idx in node_list:
-                        node_indices.append(node_idx)
-                        hyperedge_indices.append(he_idx)
-                else:
-                    node_indices.append(int(nodes))
-                    hyperedge_indices.append(he_idx)
-        else:
-            # Assume it's a tensor that needs to be interpreted
-            # as a flat list of node indices with equal-sized hyperedges
-            raise ValueError(
-                "hyperedge_index must be either a 2D tensor in bipartite format "
-                "or a list of node index lists/tensors for each hyperedge"
-            )
-        
-        # Create the bipartite edge index
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        edge_index = torch.tensor(
-            [node_indices, hyperedge_indices],
-            dtype=torch.int64,
-            device=device,
-        )
-        
-        return edge_index
+        return convert_hyperedges_to_bipartite(hyperedge_index)
 
     def remove_hyperedge_index(self, edge_type: Tuple[str, str, str]) -> bool:
         """
@@ -270,7 +227,7 @@ class HypergraphStore(
 
     def compute_hyperedge_statistics(
         self, edge_type: Tuple[str, str, str]
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Union[int, float]]:
         """
         Compute statistics about the hyperedges.
         
@@ -281,7 +238,7 @@ class HypergraphStore(
             
         Returns
         -------
-        Dict[str, float]
+        Dict[str, Union[int, float]]
             Dictionary containing:
             - 'num_hyperedges': Total number of hyperedges
             - 'avg_cardinality': Average number of nodes per hyperedge
@@ -293,6 +250,10 @@ class HypergraphStore(
         
         hyperedge_index = self.__hyperedges[edge_type]
         
+        # Convert to bipartite format if needed
+        if isinstance(hyperedge_index, (list, tuple)):
+            hyperedge_index = convert_hyperedges_to_bipartite(hyperedge_index)
+        
         # Assuming bipartite format [2, num_edges]
         if isinstance(hyperedge_index, torch.Tensor) and hyperedge_index.dim() == 2:
             if hyperedge_index.shape[0] == 2:
@@ -301,7 +262,7 @@ class HypergraphStore(
                 unique_he, counts = torch.unique(hyperedge_ids, return_counts=True)
                 
                 return {
-                    'num_hyperedges': len(unique_he),
+                    'num_hyperedges': int(len(unique_he)),
                     'avg_cardinality': float(counts.float().mean()),
                     'max_cardinality': int(counts.max()),
                     'min_cardinality': int(counts.min()),
