@@ -10,3 +10,7 @@ from cugraph_pyg.data.graph_store import (
 from cugraph_pyg.data.feature_store import (
     FeatureStore,
 )
+
+from cugraph_pyg.data.hypergraph_store import (
+    HypergraphStore,
+)
